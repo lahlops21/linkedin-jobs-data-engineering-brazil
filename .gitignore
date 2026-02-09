@@ -1,0 +1,16 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+
+# Python
+__pycache__/
+.venv/
+
+# Data
+*.csv
+*.parquet
+
+# Credentials
+*.json
