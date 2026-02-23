@@ -2,44 +2,37 @@ id: linkedin_jobs_pipeline
 namespace: linkedin
 
 description: |
-  End-to-end ingestion pipeline for LinkedIn jobs dataset
+  End-to-end pipeline for LinkedIn jobs dataset
 
 variables:
   file: "engenheiro_de_dados_6k.csv"
   gcs_file: "gs://project-linkedin-datalake-2026/raw/{{vars.file}}"
-  project_id: "linkedin-data-pipeline-project"
-  dataset: "project_linkedin_dataset_2026"
-  table_raw: "jobs_raw"
-  table_clean: "jobs_clean_v3"
-  table_dw: "jobs_dw"
 
 tasks:
 
-  # 1️⃣ Upload CSV to GCS
   - id: upload_to_gcs
     type: io.kestra.plugin.gcp.gcs.Upload
     from: "/app/data/{{vars.file}}"
     to: "{{vars.gcs_file}}"
 
-  # 2️⃣ Load RAW table (equivalent to bq load)
   - id: load_raw
-    type: io.kestra.plugin.gcp.bigquery.Load
-    from: "{{vars.gcs_file}}"
-    destinationTable: "{{vars.project_id}}.{{vars.dataset}}.{{vars.table_raw}}"
-    format: CSV
-    autodetect: true
-    skipLeadingRows: 1
-    allowQuotedNewlines: true
-    allowJaggedRows: true
-    maxBadRecords: 1000
-    writeDisposition: WRITE_TRUNCATE
+    type: io.kestra.plugin.gcp.bigquery.Query
+    sql: |
+      LOAD DATA INTO
+      `linkedin-data-pipeline-project.project_linkedin_dataset_2026.jobs_raw`
+      FROM FILES (
+        format = 'CSV',
+        uris = ['{{vars.gcs_file}}'],
+        skip_leading_rows = 1,
+        allow_quoted_newlines = true,
+        allow_jagged_rows = true
+      );
 
-    # 3️⃣ Build CLEAN V3 (deduplicated)
   - id: build_clean_v3
     type: io.kestra.plugin.gcp.bigquery.Query
     sql: |
       CREATE OR REPLACE TABLE
-      `{{vars.project_id}}.{{vars.dataset}}.jobs_clean_v3`
+      `linkedin-data-pipeline-project.project_linkedin_dataset_2026.jobs_clean_v3`
       AS
       SELECT *
       FROM (
@@ -50,17 +43,16 @@ tasks:
             ORDER BY created_at DESC
           ) AS rn
         FROM
-          `{{vars.project_id}}.{{vars.dataset}}.jobs_raw`
+        `linkedin-data-pipeline-project.project_linkedin_dataset_2026.jobs_raw`
       )
       WHERE rn = 1;
 
-  # 4️⃣ Build DW V2 (partition + cluster)
   - id: build_dw_v2
     type: io.kestra.plugin.gcp.bigquery.Query
     sql: |
       CREATE OR REPLACE TABLE
-      `{{vars.project_id}}.{{vars.dataset}}.jobs_dw_v2`
-      PARTITION BY created_date
+      `linkedin-data-pipeline-project.project_linkedin_dataset_2026.jobs_dw_v2`
+      PARTITION BY clean_date
       CLUSTER BY company_name, location, formatted_experience_level
       AS
       SELECT
@@ -74,4 +66,4 @@ tasks:
         max_salary,
         clean_date
       FROM
-      `{{vars.project_id}}.{{vars.dataset}}.jobs_clean_v3`;
+      `linkedin-data-pipeline-project.project_linkedin_dataset_2026.jobs_clean_v3`;
