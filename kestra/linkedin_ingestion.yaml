@@ -2,68 +2,56 @@ id: linkedin_jobs_pipeline
 namespace: linkedin
 
 description: |
-  End-to-end pipeline for LinkedIn jobs dataset
+  Ingestion pipeline for LinkedIn jobs dataset
 
 variables:
   file: "engenheiro_de_dados_6k.csv"
-  gcs_file: "gs://project-linkedin-datalake-2026/raw/{{vars.file}}"
+  gcs_file: "gs://project-linkedin-datalake-2026/raw/{{ vars.file }}"
 
 tasks:
 
+  # 1️⃣ Lendo arquivo local e enviar para o storage do Kestra
+  - id: load_local_csv
+    type: io.kestra.plugin.core.storage.LocalFiles
+    inputs:
+      jobs_file: "/app/data/{{ vars.file }}"
+
+  # 2️⃣ Upload do arquivo (agora no storage do Kestra) para o GCS
   - id: upload_to_gcs
     type: io.kestra.plugin.gcp.gcs.Upload
-    from: "/app/data/{{vars.file}}"
-    to: "{{vars.gcs_file}}"
+    from: "{{ outputs.load_local_csv.files.jobs_file }}"
+    to: "{{ vars.gcs_file }}"
 
-  - id: load_raw
+  # 3️⃣ Load CSV → BigQuery (raw)
+  - id: load_to_bigquery
     type: io.kestra.plugin.gcp.bigquery.Query
     sql: |
       LOAD DATA INTO
       `linkedin-data-pipeline-project.project_linkedin_dataset_2026.jobs_raw`
       FROM FILES (
         format = 'CSV',
-        uris = ['{{vars.gcs_file}}'],
-        skip_leading_rows = 1,
-        allow_quoted_newlines = true,
-        allow_jagged_rows = true
+        uris = ['{{ vars.gcs_file }}'],
+        skip_leading_rows = 1
       );
 
-  - id: build_clean_v3
-    type: io.kestra.plugin.gcp.bigquery.Query
-    sql: |
-      CREATE OR REPLACE TABLE
-      `linkedin-data-pipeline-project.project_linkedin_dataset_2026.jobs_clean_v3`
-      AS
-      SELECT *
-      FROM (
-        SELECT
-          *,
-          ROW_NUMBER() OVER (
-            PARTITION BY job_id
-            ORDER BY created_at DESC
-          ) AS rn
-        FROM
-        `linkedin-data-pipeline-project.project_linkedin_dataset_2026.jobs_raw`
-      )
-      WHERE rn = 1;
-
-  - id: build_dw_v2
+  # 4️⃣ Build Data Warehouse
+  - id: build_dw
     type: io.kestra.plugin.gcp.bigquery.Query
     sql: |
       CREATE OR REPLACE TABLE
       `linkedin-data-pipeline-project.project_linkedin_dataset_2026.jobs_dw_v2`
-      PARTITION BY clean_date
-      CLUSTER BY company_name, location, formatted_experience_level
+      PARTITION BY created_date
+      CLUSTER BY company_name, location, experience_level
       AS
       SELECT
         job_id,
-        COALESCE(company_name, 'Unknown') AS company_name,
+        COALESCE(company_name,'Unknown') AS company_name,
         location,
         standardized_title,
-        COALESCE(formatted_experience_level, 'Not informed') AS experience_level,
+        COALESCE(formatted_experience_level,'Not informed') AS experience_level,
         formatted_employment_status,
         min_salary,
         max_salary,
-        clean_date
+        clean_date AS created_date
       FROM
-      `linkedin-data-pipeline-project.project_linkedin_dataset_2026.jobs_clean_v3`;
+        `linkedin-data-pipeline-project.project_linkedin_dataset_2026.jobs_clean_v3`;
